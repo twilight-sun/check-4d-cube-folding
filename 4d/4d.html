@@ -1,5 +1,26 @@
 <!doctype html>
-<link rel="stylesheet" href="styles.css">
+<head>
+<style>
+.styled {
+    border: 0;
+    font-size: 1rem;
+    text-align: center;
+    color: #fff;
+    text-shadow: 1px 1px 1px #000;
+    border-radius: 10px;
+    background-color: rgba(220, 0, 0, 1);
+}
+
+.styled:hover {
+    background-color: rgba(255, 0, 0, 1);
+}
+
+.styled:active {
+    box-shadow: inset -2px -2px 3px rgba(255, 255, 255, .6),
+                inset 2px 2px 3px rgba(0, 0, 0, .6);
+}
+</style>
+</head>
 <body>
 <br>
 8 numbers (unique, from 1..512, separated by comma):<br>
@@ -183,7 +204,7 @@ manual: input numbers, click "apply". then click (maybe several times) "step" an
   document.getElementById('apply').onclick = function (){
 	if (!ctx['3d'] || !ctx['4d']) return;
 	let newNet = document.getElementById('input').value.split(',').map(s => +s.trim());
-	if (newNet.length != 8 || newNet.some(x => isNaN(x))) {alert('wrong input'); return;}
+	if (newNet.length != 8 || newNet.some(x => isNaN(x) || x < 1 || x > 512 || x%1)) {alert('wrong input'); return;}
 	stepGen = undefined;
 	net = newNet;
 	updateAdjustments();
@@ -249,7 +270,6 @@ manual: input numbers, click "apply". then click (maybe several times) "step" an
 	ctx['4d'] = canvas['4d'].getContext('2d');
 	document.getElementById('rotate3d').checked = false;
 	document.getElementById('rotate4d').checked = false;
-	//if (!renderIntervalID) setInterval(renderNextFrame, 50);
 	window.requestAnimationFrame(renderNextFrame);
   }
 </script>
