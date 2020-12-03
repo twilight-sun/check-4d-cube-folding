@@ -1,0 +1,256 @@
+<!doctype html>
+<link rel="stylesheet" href="styles.css">
+<body>
+<br>
+8 numbers (unique, from 1..512, separated by comma):<br>
+  <input id="input" value="10, 74, 73, 75, 66, 82, 138, 202" size=64>   <button id="apply" class="styled"
+        type="button">
+   Apply
+</button>&nbsp;&nbsp;&nbsp;&nbsp;
+<button id="step" class="styled"
+        type="button">
+   Step
+</button>&nbsp;&nbsp;&nbsp;&nbsp;
+<input type="checkbox" id="rotate4d" name="rotate4d">
+<label for="rotate4d">rotate 4d cube</label> 
+<input type="checkbox" id="rotate3d" name="rotate3d">
+<label for="rotate3d">rotate 3d net</label> 
+<br><br>
+<canvas id="cube" width="600" height="600" style="border:1px solid #000000;"> 
+  Your browser does not support the canvas element.
+</canvas>&nbsp;
+<canvas id="net" width="600" height="600" style="border:1px solid #000000;"> 
+  Your browser does not support the canvas element. 
+</canvas>
+<br>
+manual: input numbers, click "apply". then click (maybe several times) "step" and/or check boxes, as you wish.
+<script>
+
+  const canvas = {'3d':document.getElementById('net'), '4d':document.getElementById('cube')};
+  const ctx = {};
+  const defaultAdjustments = {dx:0, dy:0, kx:1, ky:1};
+  const adjustments = {'3d':{dx:300, dy:300, kx:50, ky:50},'4d':{dx:150, dy:150, kx:200, ky:200}};
+  const lines = {'3d': [], '4d': []};
+  const rotations = {'3d': {a:.3,b:.5,c:.05, da:.05,db:.06, dc:.02, motion:false}, '4d': {a:.2,b:.4,c:.6,d:.8, da:.02, db:.03,dc:.025,dd:.035, motion:false}};
+  
+  var net, stepGen, renderIntervalID;
+  
+  var directions = [[1,0,0], [0,1,0], [0,0,1], [-1,0,0], [0,-1,0], [0,0,-1]];// [x, y, z]
+  
+  var fold_tesseract = function*(inp){
+	let set = new Set(inp);
+	//if (set.size != 8) return false;//just in case
+	let toCoos = (x) => [(x - 1) % 8, Math.floor((x - 1) % 64 / 8), Math.floor((x - 1) / 64)]; //x,y,z in 0..7
+	let toCell = ([x, y, z]) => x + 1 + y * 8 + z * 64;
+	let faces = new Array(8).fill(false);//what we already wrapped
+	let toWalkerCoos = face => [.5, .5, .5, .5].map((v, i) => i == face % 4 ? +(face > 3) : v);
+	let toFace = (walkerCoos) => {let i = walkerCoos.findIndex(x=> x != .5); return i + 4 * (walkerCoos[i] > 0)};
+	//every step is 0.5 : from centre of 3d face to centre of 2d edge or viсe versa
+	let makeStep = (walker, walkerCoos, direction) => 
+	  walkerCoos.map((v, i) => v + .5*(direction[0] * walker.x[i] + direction[1] * walker.y[i] + direction[2] * walker.z[i]));
+	let vMul = (v1, v2) => v1.reduce((a, x, i) => a + x*v2[i], 0);
+	let rotate = (walker, walkerCoos) => {
+		let newWalker = {x: [...walker.x], y: [...walker.y], z: [...walker.z]};
+		for (const p in newWalker)
+		  if (!vMul(newWalker[p], walkerCoos.map(x => x % 1))){
+			let i = newWalker[p].findIndex(x => x);
+			let j = walkerCoos.findIndex((x, k) => x != .5 && i != k);
+			newWalker[p][j] = -Math.sign((.5-walkerCoos[i])*(.5-walkerCoos[j])*newWalker[p][i]);
+			newWalker[p][i] = 0;
+		  } 
+		return newWalker;
+	};
+	function* wrap(walker, face, cell){
+		//if (faces[face]) return;//no overlap
+		
+		set.delete(cell);
+		faces[face] = true;//wrap current face
+		let coos = toCoos(cell);
+		let walkerCoos = toWalkerCoos(face);
+		yield {walker, face, cell, walkerCoos, coos};
+		for (let i = 0; i < 6; ++i){
+		  let newCoos = coos.map((c, j) => c + directions[i][j]);
+		  //cell must be in net
+		  if (newCoos.every(c => c >= 0 && c < 8) && set.has(toCell(newCoos))){
+			let newWalkerCoos = makeStep(walker, walkerCoos, directions[i]);
+			let newWalker = rotate(walker, newWalkerCoos);
+			newWalkerCoos = makeStep(newWalker, newWalkerCoos, directions[i]);
+			let newFace = toFace(newWalkerCoos);
+			if (faces[newFace]) continue;
+			yield* wrap(newWalker, newFace, toCell(newCoos));
+		  }  
+		}
+	}
+	yield* wrap({ x : [0,1,0,0], y:[0,0,1,0], z:[0,0,0,1] }, 0, inp[0]);
+	return !set.size;
+  }
+  
+  function line(ctx, x0,y0,x1,y1){
+	ctx.beginPath();
+	ctx.moveTo(x0, y0);
+	ctx.lineTo(x1, y1);
+	ctx.closePath();
+	ctx.stroke();
+  }
+  function rotate(a, p, ix, iy){
+	[p[ix], p[iy]] = [p[ix]*Math.cos(a) - p[iy]*Math.sin(a), p[iy]*Math.cos(a) + p[ix]*Math.sin(a)];
+  }
+  function transform3d(p, adj = adjustments['3d']){
+	let r = rotations['3d'];
+	let p0 = p.slice();
+	rotate(r.a,p0,0,1);
+	rotate(r.b,p0,1,2);
+	rotate(r.c,p0,2,0);
+	let [x,y,z] = p0;
+	return [adj.dx + x*adj.kx, adj.dy + z*adj.ky];
+  }
+  function line3d(a,b){
+	line(ctx['3d'], ...transform3d(a), ...transform3d(b));
+  }
+  function transform4d(p, adj = adjustments['4d']){
+	let r = rotations['4d'];
+	let p0 = p.slice();
+	rotate(r.a,p0,0,1);
+	rotate(r.b,p0,1,2);
+	rotate(r.c,p0,2,3);
+	rotate(r.d,p0,3,0);
+	let [x,y,z,t] = p0;
+	return [adj.dx + x*adj.kx, adj.dy + y*adj.ky];
+  }
+  function line4d(a,b){
+	line(ctx['4d'], ...transform4d(a), ...transform4d(b));
+  }
+  function addLine(type,a,b,style){
+	let line = lines[type].find(l => l.a.every((x,i) => x == a[i]) && l.b.every((x,i) => x == b[i]));
+	if (line) line.style = style;
+	else lines[type].push({a,b,style});
+  }
+  function drawLine(type, line){
+	ctx[type].strokeStyle = line.style;
+	(type == '3d' ? line3d : line4d)(line.a, line.b);
+  }
+  function refreshCanvas(type){
+	ctx[type].fillStyle = 'rgb(255,255,255)';
+	ctx[type].fillRect(0,0,600,600);
+	lines[type].forEach(l => drawLine(type, l));
+  }
+  const indexToCoo = (i, d=3) => i.toString(2).padStart(d, '0').split('').map(s => +s);
+  const netCellToCoo = v => [(v - 1) % 8, Math.floor((v - 1) % 64 / 8), Math.floor((v - 1) / 64)];//0..7
+  
+  function drawNet(){
+	lines['3d'] = [];
+	function drawCube(x,y,z){
+		let line = ([x0,y0,z0],[x1,y1,z1]) => addLine('3d',[x+x0,y+y0,z+z0],[x+x1,y+y1,z+z1],'rgb(0,64,0)');
+		for (let i=0; i<8;++i) for (let j=0; j<8;++j) if(i != j && ((i^j) == 1 || (i^j) == 2 || (i^j) == 4)) line(indexToCoo(i), indexToCoo(j));
+	}
+	net.forEach(v => {
+	  let [x,y,z] = netCellToCoo(v);
+	  drawCube(x, y, z);
+	})
+	refreshCanvas('3d');
+  }
+  function draw4dCube(){
+    lines['4d'] = [];
+	for (let i=0; i<16;++i) for (let j=0; j<16;++j) if(i != j && ((i^j) == 1 || (i^j) == 2 || (i^j) == 4 || (i^j) == 8)) {
+		let a = indexToCoo(i, 4), b = indexToCoo(j, 4);
+		addLine('4d', a, b, `rgb(${(a[1]+b[1])*60}, ${(a[2]+b[2])*60}, ${(a[3]+b[3])*60})`);
+	}
+	refreshCanvas('4d');
+  }
+  function updateAdjustments(){
+	let maxX = -Infinity, minX = Infinity, maxY = -Infinity, minY = Infinity;
+	let updateMaxMin = p => {
+		maxX = Math.max(p[0], maxX);
+		minX = Math.min(p[0], minX);
+		maxY = Math.max(p[1], maxY);
+		minY = Math.min(p[1], minY);
+	};
+	net.forEach(v => {
+	  let d = netCellToCoo(v);
+	  for (let i = 0; i < 8; ++i) updateMaxMin(transform3d(indexToCoo(i).map((x,j) => x+d[j]), defaultAdjustments));
+	});
+	let setAdjustmens = adj => {
+		adj.kx = 560 / Math.max(maxX-minX, maxY-minY);
+		adj.ky = adj.kx;
+		adj.dx = 300 - (maxX+minX)/2*adj.kx;
+		adj.dy = 300 - (maxY+minY)/2*adj.ky;
+	}
+	setAdjustmens(adjustments['3d']);
+	maxX = -Infinity, minX = Infinity, maxY = -Infinity, minY = Infinity;
+	for (let i = 0; i < 16; ++i) updateMaxMin(transform4d(indexToCoo(i, 4), defaultAdjustments));
+	setAdjustmens(adjustments['4d']);
+  }
+  document.getElementById('apply').onclick = function (){
+	if (!ctx['3d'] || !ctx['4d']) return;
+	let newNet = document.getElementById('input').value.split(',').map(s => +s.trim());
+	if (newNet.length != 8 || newNet.some(x => isNaN(x))) {alert('wrong input'); return;}
+	stepGen = undefined;
+	net = newNet;
+	updateAdjustments();
+	drawNet();
+	draw4dCube();
+	
+  }
+  document.getElementById('step').onclick = function (){
+	if (!net) return;
+	if (!stepGen) {stepGen = fold_tesseract(net);stepGen.counter = 0;}
+	let res = stepGen.next();
+	stepGen.counter++;
+	let colorVal = 225 - stepGen.counter * 16;
+	let len = .16 + .02 * stepGen.counter;
+	let val = res.value;
+	if (val && val.coos){
+		addLine('3d', val.coos.map(x => x+.5), val.coos.map((x,i) => x + .5 + len*(i==0)), `rgb(${colorVal},0,0)`);
+		addLine('3d', val.coos.map(x => x+.5), val.coos.map((x,i) => x + .5 + len*(i==1)), `rgb(0,${colorVal},0)`);
+		addLine('3d', val.coos.map(x => x+.5), val.coos.map((x,i) => x + .5 + len*(i==2)), `rgb(0,0,${colorVal})`);
+		if (!rotations['3d'].motion) refreshCanvas('3d');
+	}
+	if (val && val.walkerCoos && val.walker){
+		addLine('4d', val.walkerCoos, val.walkerCoos.map((v, i) => v + len * val.walker.x[i]), `rgb(${colorVal},0,0)`);
+		addLine('4d', val.walkerCoos, val.walkerCoos.map((v, i) => v + len * val.walker.y[i]), `rgb(0,${colorVal},0)`);
+		addLine('4d', val.walkerCoos, val.walkerCoos.map((v, i) => v + len * val.walker.z[i]), `rgb(0,0,${colorVal})`);
+		if (!rotations['4d'].motion) refreshCanvas('4d');
+	}
+	if (res.done) {stepGen = undefined;drawNet();draw4dCube();}
+  }
+  document.getElementById('rotate3d').onchange = document.getElementById('rotate4d').onchange = function(){
+	rotations['3d'].motion = document.getElementById('rotate3d').checked;
+	rotations['4d'].motion = document.getElementById('rotate4d').checked;
+  }
+  
+  let renderStart3d, renderStart4d;
+  
+  let angleAdd = (a, da) => {a+=da; while (a > Math.PI*2) a-=Math.PI*2; while (a < 0) a+=Math.PI*2; return a;};
+  
+  function renderNextFrame(timestamp){
+	if (!rotations['3d'].motion) renderStart3d = undefined;
+	if (!rotations['4d'].motion) renderStart4d = undefined;
+	if (net && (rotations['3d'].motion || rotations['4d'].motion)){
+		if (rotations['3d'].motion) {
+			let coef = renderStart3d == undefined ? 0 : (timestamp - renderStart3d)/200;
+			renderStart3d = timestamp;
+			let r = rotations['3d'];
+			['a','b','c'].forEach(s => r[s] = angleAdd(r[s], r['d'+s] * coef));
+		}
+		if (rotations['4d'].motion) {
+			let coef = renderStart4d == undefined ? 0 : (timestamp - renderStart4d)/200;
+			renderStart4d = timestamp;
+			let r = rotations['4d'];
+			['a','b','c','d'].forEach(s => r[s] = angleAdd(r[s], r['d'+s] * coef));
+		}
+		updateAdjustments();
+		if (rotations['3d'].motion) refreshCanvas('3d');
+		if (rotations['4d'].motion) refreshCanvas('4d');
+	}
+	window.requestAnimationFrame(renderNextFrame);
+  }
+  window.onload = function (){
+	ctx['3d'] = canvas['3d'].getContext('2d');
+	ctx['4d'] = canvas['4d'].getContext('2d');
+	document.getElementById('rotate3d').checked = false;
+	document.getElementById('rotate4d').checked = false;
+	//if (!renderIntervalID) setInterval(renderNextFrame, 50);
+	window.requestAnimationFrame(renderNextFrame);
+  }
+</script>
+</body>
